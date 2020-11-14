@@ -69,7 +69,7 @@ def plot_figure(recons, originals, attention_regions, selected_experts, recons_s
                 exp = selected_experts[att_id]
             axe.grid(False)
             axe.axis('off')
-            axe.imshow(img, norm=NoNorm(), cmap='gray')
+            axe.imshow(img.squeeze(), norm=NoNorm(), cmap='gray')
             axe.set_title("Atten\nEXP: {}".format(exp))
 
     for object_id in range(len(recons_steps)):

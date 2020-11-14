@@ -172,6 +172,7 @@ class Configurator:
                                      param_type=int,
                                      default=1,
                                      help="Minimum number of objects")
+
         self.add_configuration("default")
         self.add_param_configuration(name_config="default",
                                      identifier="load_parameters",
@@ -330,6 +331,11 @@ def load_config():
                                           param_type=float,
                                           default=0.1,
                                           help="How much the losing experts are punished")
+    config_engine.add_param_configuration(name_config="ECON_sprite",
+                                          identifier="competition_temperature",
+                                          param_type=float,
+                                          default=1.,
+                                          help="Temperature in the softmax of the competition between experts. A bigger temeprature means that the experts are more equally likely to be picked")
 
     cfgs = config_engine.parse()
 

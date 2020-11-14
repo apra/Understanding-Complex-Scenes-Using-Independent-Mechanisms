@@ -234,7 +234,10 @@ def test_tensor(ten, name="name"):
     print("{} ... max: {}, min: {}, mean: {}".format(name, torch.max(ten), torch.min(ten),
                                                      torch.mean(ten)))
 
+
 import torch.autograd.profiler as profiler
+
+
 def run_training_ECON(monet, params, trainloader, testloader, logger, device):
     checkpoint_file = os.path.join(logger.checkpoints_dir, "checkpoint.ckpt")
     if params["load_parameters"] and os.path.isfile(checkpoint_file):
@@ -250,26 +253,28 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
 
     loss_history = {
         "loss": {"values": [], "time": []},
-        "loss_x": {"values": [], "time": []},
-        "loss_r": {"values": [], "time": []},
-        "loss_z": {"values": [], "time": []}
+        "loss_x_t": {"values": [], "time": []},
+        "loss_r_t": {"values": [], "time": []},
+        "loss_z_t": {"values": [], "time": []}
     }
     val_loss_history = {
         "loss": {"values": [], "time": []},
-        "loss_x": {"values": [], "time": []},
-        "loss_r": {"values": [], "time": []},
-        "loss_z": {"values": [], "time": []}
+        "loss_x_t": {"values": [], "time": []},
+        "loss_r_t": {"values": [], "time": []},
+        "loss_z_t": {"values": [], "time": []}
     }
     epochs = params["num_steps"] // len(trainloader) + 1
-    cnn_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs - 1, eta_min=1e-6)
-    #cnn_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5,
+    #cnn_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, params["num_steps"]//params["vis_every"], eta_min=1e-6)
+    # cnn_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5,
     #                                                           factor=1 / np.sqrt(10.))
 
     current_step = 0
     Logger.log("Epochs: {}".format(epochs))
     for epoch in range(epochs):
-        running_loss = 0.0
+        running_loss = 0.
+        cnn_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, len(trainloader)//params["vis_every"], eta_min=1e-6)
         for data in trainloader:
+            print(optimizer.param_groups[0]['lr'])
             torch.cuda.empty_cache()
             Logger.cluster_log("Step: {}".format(current_step))
             images, counts = data
@@ -281,9 +286,23 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
             loss.backward()
             optimizer.step()
 
+
+
+            selected_experts = np.stack(output["selected_expert_per_object"])
+
+            selected_results = {}
+
+            for key in output["results"][0][0].keys():
+                selected_results[key] = np.zeros((len(selected_experts), len(selected_experts[0]),
+                                                  *output["results"][0][0][key][0].shape))
+                for obj in range(len(selected_experts)):
+                    for sample in range(len(selected_experts[0])):
+                        selected_results[key][obj, sample] = \
+                            output["results"][obj][selected_experts[obj][sample]][key][sample]
+
             for param in loss_history.keys():
                 loss_history[param]["time"].append(current_step)
-                loss_history[param]["values"].append(torch.mean(output[param]).detach().cpu().numpy())
+                loss_history[param]["values"].append(np.mean(selected_results[param]))
 
             running_loss += loss.cpu().item()
             del images
@@ -292,7 +311,7 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
             del loss
 
             if current_step % params["vis_every"] == 0:
-
+                cnn_scheduler.step()
                 with torch.no_grad():
                     monet.eval()
                     batch_val_loss_history = {}
@@ -306,31 +325,32 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                         images = images.to(device)
 
                         output = monet(images)
+                        selected_experts = np.stack(output["selected_expert_per_object"])
+                        selected_results = {}
+
+                        for key in output["results"][0][0].keys():
+                            selected_results[key] = np.zeros((len(selected_experts),
+                                                              len(selected_experts[0]),
+                                                              *output["results"][0][0][
+                                                                  key][0].shape))
+                            for obj in range(len(selected_experts)):
+                                for sample in range(len(selected_experts[0])):
+                                    selected_results[key][obj, sample] = \
+                                        output["results"][obj][selected_experts[obj][sample]][
+                                            key][sample]
                         if a == 0:
                             a = 1
-                            visualize.plot_figure(recons=output["recon"].detach().cpu().numpy(),
-                                                  originals=images.detach().cpu().numpy(),
-                                                  attention_regions=[
-                                                      x.detach().squeeze().cpu().numpy() for
-                                                      x in
-                                                      output["attention_regions"]],
-                                                  selected_experts=[
-                                                      x.detach().squeeze().cpu().numpy() for x
-                                                      in
-                                                      output["selected_expert_per_object"]],
-                                                  recons_steps=[x.detach().squeeze().cpu().numpy()
-                                                                for x in
-                                                                output["recons_steps"]],
-                                                  recons_steps_not_masked=[
-                                                      x.detach().squeeze().cpu().numpy()
-                                                      for x in
-                                                      output["recons_steps_not_masked"]],
-                                                  logger=logger)
-
+                            visualize.plot_figure(
+                                recons=np.sum(selected_results["x_recon_t"], axis=0),
+                                originals=images.detach().cpu().numpy(),
+                                attention_regions=selected_results["region_attention"],
+                                selected_experts=selected_experts,
+                                recons_steps=selected_results["x_recon_t"],
+                                recons_steps_not_masked=selected_results["x_recon_t_not_masked"],
+                                logger=logger)
 
                         for param in loss_history.keys():
-                            batch_val_loss_history[param].append(
-                                torch.mean(output[param]).detach().cpu().numpy())
+                            batch_val_loss_history[param].append(np.mean(selected_results[param]))
                         del images
                         del output
 
@@ -356,14 +376,13 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                     plt.savefig(logger.get_sequential_figure_name("ECON_LOSS"), bbox_inches="tight")
                     plt.close()
 
-
                     # plt.show()
                     if not params["dontstore"]:
                         torch.save(monet.state_dict(), checkpoint_file)
                     monet.train()
 
             current_step += 1
-        cnn_scheduler.step()
+
 
     Logger.cluster_log('training done')
 

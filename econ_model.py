@@ -347,6 +347,12 @@ class Expert(nn.Module):
         return NotImplementedError
 
 
+def all_to_cpu(data):
+    result = {}
+    for key, value in data.items():
+        result[key] = value.detach().cpu().numpy()
+    return result
+
 class ECON(nn.Module):
 
     def __init__(self, params):
@@ -361,89 +367,65 @@ class ECON(nn.Module):
 
         self.punish_factor = params["punish_factor"]
 
+        self.competition_temperature = params["competition_temperature"]
+
     def forward(self, x):
         loss = torch.zeros_like(x[:, 0, 0, 0])
-        loss_x = torch.zeros_like(x[:, 0, 0, 0])
-        loss_z = torch.zeros_like(x[:, 0, 0, 0])
-        loss_r = torch.zeros_like(x[:, 0, 0, 0])
+
         batch_size = x.shape[0]
         log_scope = torch.zeros_like(x[:, 0:1])
-        final_recon = torch.zeros_like(x)
-        masks = []
-        recons_steps = []
-        recons_steps_not_masked = []
-        attention_regions = []
+
+        collected_results = []
         selected_expert_per_object = []
 
         indexes = list(range(batch_size))
 
         for i in range(self.num_objects):
             competition_results = []
+            losses = []
             results = []
+            candidate_scopes = []
             for j, expert in enumerate(self.experts):
+                # run the expert
                 results_expert = expert(x, log_scope, last_object=(i == (self.num_objects - 1)))
+
+                # collect the gradient-related results
                 competition_results.append(results_expert["competition_objective"])
-                results.append(results_expert)
+                losses.append(results_expert["loss"])
+                candidate_scopes.append(results_expert["next_log_s_t"])
+
+                # collect the non-gradient related results to analyze performance
+                results.append(all_to_cpu(results_expert))
+
+                del results_expert
+
+            collected_results.append(results)
 
             # stack of reconstruction losses for every expert at object j
-            losses = torch.stack([x["loss"] for x in results], dim=1)
+            losses = torch.stack(losses, dim=0)
 
-            # if torch.isinf(losses).any():
-            #     print("INF")
-
-            decision = dists.Categorical(
-                probs=F.softmax(torch.stack(competition_results, dim=1), dim=1))
+            decision = dists.Categorical(probs=F.softmax(
+                torch.stack(competition_results, dim=1) / self.competition_temperature, dim=1))
             selected_expert = decision.sample()
-            selected_expert_per_object.append(selected_expert)
+            selected_expert_per_object.append(selected_expert.cpu().numpy())
             # print("asdfads", selected_expert)
 
-            loss = loss + losses[indexes, selected_expert]
+            loss = loss + losses[selected_expert, indexes]
 
-            # partial reconstructions
-            recons_t = torch.stack([x["x_recon_t"] for x in results], dim=1)[
-                indexes, selected_expert].data
-            recons_steps.append(recons_t)
-            # partial attention regions
-            all_attention_regions = torch.stack([x["region_attention"] for x in results], dim=1)
-            region_attention_t = all_attention_regions[indexes, selected_expert].data
-            attention_regions.append(region_attention_t)
+            # dontpayattention = torch.zeros_like(region_attention_t)
 
-            recons_steps_not_masked_t = \
-                torch.stack([x["x_recon_t_not_masked"] for x in results], dim=1)[
-                    indexes, selected_expert].data
-            recons_steps_not_masked.append(recons_steps_not_masked_t)
-
-            # the final reconstruction
-            final_recon += recons_t
-
-            loss_x += torch.stack([x["loss_x_t"] for x in results], dim=1)[
-                indexes, selected_expert].data
-            loss_r += torch.stack([x["loss_r_t"] for x in results], dim=1)[
-                indexes, selected_expert].data
-            loss_z += torch.stack([x["loss_z_t"] for x in results], dim=1)[
-                indexes, selected_expert].data
-
-            #dontpayattention = torch.zeros_like(region_attention_t)
-
-            #optim_objective = optim_objective + losses[selected_expert]
-                              # + self.punish_factor * \
-                              # torch.nn.BCELoss()(all_attention_regions[indexes, ~selected_expert],
-                              #                     dontpayattention) / (len(self.experts) - 1)
+            # optim_objective = optim_objective + losses[selected_expert]
+            # + self.punish_factor * \
+            # torch.nn.BCELoss()(all_attention_regions[indexes, ~selected_expert],
+            #                     dontpayattention) / (len(self.experts) - 1)
 
             # update the next scope for the network
-            candidate_scopes = torch.stack([x["next_log_s_t"] for x in results], dim=1)
-            log_scope = candidate_scopes[indexes, selected_expert]
+            candidate_scopes = torch.stack(candidate_scopes, dim=0)
+            log_scope = candidate_scopes[selected_expert, indexes]
             # print(next_scopes.shape, scope.shape)
 
         return {
-            #"optim_obj": optim_objective,
             "loss": loss,
-            "recons_steps": recons_steps,
-            "recons_steps_not_masked": recons_steps_not_masked,
-            "recon": final_recon,
-            "attention_regions": attention_regions,
-            "loss_x": loss_x,
-            "loss_r": loss_r,
-            "loss_z": loss_z,
+            "results": collected_results,
             "selected_expert_per_object": selected_expert_per_object
         }
