@@ -123,6 +123,26 @@ class Sprites(Dataset):
         return img, self.counts[idx]
 
 
+class Coinrun(Dataset):
+    def __init__(self, directory, dataset_name, train=True, transform=None ):
+        full_path = os.path.join(directory, dataset_name)
+
+        data = h5py.File(full_path, "r")
+
+        self.transform = transform
+        self.images = data['x_train'][:] if train else data['x_test'][:]
+        print(self.images.shape)
+
+    def __len__(self):
+        return self.images.shape[0]
+
+    def __getitem__(self, idx):
+        img = self.images[idx]
+        if self.transform is not None:
+            img = self.transform(img)
+        return img, torch.empty([])
+
+
 class Clevr(Dataset):
     def __init__(self, directory, transform=None):
         self.directory = directory

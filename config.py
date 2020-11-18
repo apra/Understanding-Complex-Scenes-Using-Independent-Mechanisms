@@ -172,6 +172,16 @@ class Configurator:
                                      param_type=int,
                                      default=1,
                                      help="Minimum number of objects")
+        self.add_param_configuration(name_config="common",
+                                     identifier="load",
+                                     param_type=bool,
+                                     default=False,
+                                     help="Whether to load a previous experiment and keep training for num_steps")
+        self.add_param_configuration(name_config="common",
+                                     identifier="experiment_folder",
+                                     param_type=str,
+                                     default=None,
+                                     help="Folder of the experiment where to start from to keep training")
 
         self.add_configuration("default")
         self.add_param_configuration(name_config="default",
@@ -252,7 +262,7 @@ class Configurator:
         else:
             specific_args = self.configurations["default"].parse(self.parser)
 
-        return [
+        return name_config, [
             common_args,
             specific_args
         ]
@@ -327,6 +337,16 @@ def load_config():
                                           default=False,
                                           help="Load parameters from checkpoint")
     config_engine.add_param_configuration(name_config="ECON_sprite",
+                                          identifier="disable_scheduler",
+                                          param_type=bool,
+                                          default=False,
+                                          help="Disable the scheduler")
+    config_engine.add_param_configuration(name_config="ECON_sprite",
+                                          identifier="data_dep_init",
+                                          param_type=bool,
+                                          default=False,
+                                          help="Enable data-dependent initialization")
+    config_engine.add_param_configuration(name_config="ECON_sprite",
                                           identifier="punish_factor",
                                           param_type=float,
                                           default=0.1,
@@ -336,10 +356,112 @@ def load_config():
                                           param_type=float,
                                           default=1.,
                                           help="Temperature in the softmax of the competition between experts. A bigger temeprature means that the experts are more equally likely to be picked")
+    config_engine.add_param_configuration(name_config="ECON_sprite",
+                                          identifier="annealing_start",
+                                          param_type=int,
+                                          default=0,
+                                          help="Starting epoch of the annealing of the parameters beta and gamma in the loss")
+    config_engine.add_param_configuration(name_config="ECON_sprite",
+                                          identifier="annealing_duration",
+                                          param_type=int,
+                                          default=200,
+                                          help="Number of steps that the annealing phase lasts for")
 
-    cfgs = config_engine.parse()
+    config_engine.add_configuration("ECON_coinrun")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="num_blocks",
+                                          param_type=int,
+                                          default=5,
+                                          help="Number of blocks in attention U-Net")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="beta_loss",
+                                          param_type=float,
+                                          default=1.,
+                                          help="Beta term in the loss, in front of the loss_z_t.")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="gamma_loss",
+                                          param_type=float,
+                                          default=1.,
+                                          help="Gamma term in the loss, in front of the loss_r_t.")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="lambda_competitive",
+                                          param_type=float,
+                                          default=1.,
+                                          help="Lambda term in the competition objective.")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="bg_sigma",
+                                          param_type=float,
+                                          default=0.09,
+                                          help="Sigma of the decoder distributions for the first slot")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="fg_sigma",
+                                          param_type=float,
+                                          default=0.11,
+                                          help="Sigma of the decoder distributions for all other slots")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="num_objects",
+                                          param_type=int,
+                                          default=2,
+                                          help="Number of objects in the scene")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="num_experts",
+                                          param_type=int,
+                                          default=3,
+                                          help="Number of experts")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="channel_base",
+                                          param_type=int,
+                                          default=64,
+                                          help="Number of channels used for the first U-Net conv layer")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="input_channels",
+                                          param_type=int,
+                                          default=3,
+                                          help="Channels in the input image")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="load_parameters",
+                                          param_type=bool,
+                                          default=False,
+                                          help="Load parameters from checkpoint")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="disable_scheduler",
+                                          param_type=bool,
+                                          default=False,
+                                          help="Disable the scheduler")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="data_dep_init",
+                                          param_type=bool,
+                                          default=False,
+                                          help="Enable data-dependent initialization")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="punish_factor",
+                                          param_type=float,
+                                          default=0.1,
+                                          help="How much the losing experts are punished")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="competition_temperature",
+                                          param_type=float,
+                                          default=1.,
+                                          help="Temperature in the softmax of the competition between experts. A bigger temeprature means that the experts are more equally likely to be picked")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="annealing_start",
+                                          param_type=int,
+                                          default=0,
+                                          help="Starting epoch of the annealing of the parameters beta and gamma in the loss")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="annealing_duration",
+                                          param_type=int,
+                                          default=200,
+                                          help="Number of steps that the annealing phase lasts for")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="dataset_name",
+                                          param_type=str,
+                                          default="coirun_dataset_train.hdf5",
+                                          help="Name of the file where the dataset is located")
 
-    params = {}
+    name_config, cfgs = config_engine.parse()
+
+    params = {"name_config": name_config}
     for cfg in cfgs:
         print(cfg.to_string())
         params.update(cfg.p)

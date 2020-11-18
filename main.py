@@ -238,55 +238,90 @@ def test_tensor(ten, name="name"):
 import torch.autograd.profiler as profiler
 
 
-def run_training_ECON(monet, params, trainloader, testloader, logger, device):
-    checkpoint_file = os.path.join(logger.checkpoints_dir, "checkpoint.ckpt")
-    if params["load_parameters"] and os.path.isfile(checkpoint_file):
-        monet.load_state_dict(torch.load(checkpoint_file))
-        Logger.cluster_log('Restored parameters from {}'.format(checkpoint_file))
+def sigmoid_annealing(start_value, end_value, start_steps, end_steps, current_step):
+    if current_step < start_steps:
+        return start_value
+    elif current_step > end_steps:
+        return end_value
     else:
-        for w in monet.parameters():
-            std_init = 0.01
-            nn.init.normal_(w, mean=0., std=std_init)
-        Logger.cluster_log('Initialized parameters')
+        return (1 / (1 + np.exp(
+            -5 * (((current_step - start_steps) / (end_steps - start_steps)) - 0.5)))) * (
+                       end_value - start_value) + start_value
 
-    optimizer = optim.Adam(monet.parameters(), lr=params["learning_rate"])
+
+def run_training_ECON(monet, params, trainloader, testloader, logger, device):
+    if params["load"]:
+        state = logger.load_checkpoint()
+        monet.load_state_dict(state["model"])
+        Logger.cluster_log('Restored parameters from {}'.format(logger.save_dir))
+    else:
+        if params["data_dep_init"]:
+            # initialize network:
+            x, _ = next(iter(trainloader))
+            econ_model.data_dependent_init(monet, x.to(device))
+            Logger.cluster_log("Finished data-dependent initialization")
+        else:
+            for w in monet.parameters():
+                std_init = 0.01
+                nn.init.normal_(w, mean=0., std=std_init)
+            Logger.cluster_log('Initialized parameters')
+
+    optimizer = optim.Adam(monet.parameters(), lr=params["learning_rate"], weight_decay=1.)
 
     loss_history = {
         "loss": {"values": [], "time": []},
         "loss_x_t": {"values": [], "time": []},
         "loss_r_t": {"values": [], "time": []},
-        "loss_z_t": {"values": [], "time": []}
+        "loss_z_t": {"values": [], "time": []},
+        # "per_object_loss": {"values": [], "time": []}
     }
     val_loss_history = {
         "loss": {"values": [], "time": []},
         "loss_x_t": {"values": [], "time": []},
         "loss_r_t": {"values": [], "time": []},
-        "loss_z_t": {"values": [], "time": []}
+        "loss_z_t": {"values": [], "time": []},
+        # "per_object_loss": {"values": [], "time": []},
     }
     epochs = params["num_steps"] // len(trainloader) + 1
-    #cnn_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, params["num_steps"]//params["vis_every"], eta_min=1e-6)
-    # cnn_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5,
+    # cnn_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, params["num_steps"]//params["vis_every"], eta_min=1e-6)
+    #cnn_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5,
     #                                                           factor=1 / np.sqrt(10.))
 
     current_step = 0
     Logger.log("Epochs: {}".format(epochs))
+    beta = None
+    gamma = None
+    best_loss = np.infty
     for epoch in range(epochs):
         running_loss = 0.
-        cnn_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, len(trainloader)//params["vis_every"], eta_min=1e-6)
+        if not params["disable_scheduler"]:
+            cnn_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                                                                 len(trainloader) // params[
+                                                                     "vis_every"], eta_min=1e-6)
         for data in trainloader:
-            print(optimizer.param_groups[0]['lr'])
+            if params["annealing_start"] > 0:
+                beta = sigmoid_annealing(start_value=0., end_value=params["beta_loss"],
+                                         start_steps=params["annealing_start"],
+                                         end_steps=params["annealing_duration"] + params[
+                                             "annealing_start"], current_step=current_step)
+                gamma = sigmoid_annealing(start_value=0., end_value=params["gamma_loss"],
+                                          start_steps=params["annealing_start"],
+                                          end_steps=params["annealing_duration"] + params[
+                                              "annealing_start"], current_step=current_step)
+
+            Logger.log(
+                "Learning rate: {}. Beta: {}. Gamma: {}.".format(optimizer.param_groups[0]['lr'],
+                                                                 beta, gamma))
             torch.cuda.empty_cache()
             Logger.cluster_log("Step: {}".format(current_step))
             images, counts = data
             images = images.to(device)
             optimizer.zero_grad()
-            output = monet(images)
+            output = monet(images, beta, gamma)
 
             loss = torch.mean(output['loss'])
             loss.backward()
             optimizer.step()
-
-
 
             selected_experts = np.stack(output["selected_expert_per_object"])
 
@@ -302,29 +337,37 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
 
             for param in loss_history.keys():
                 loss_history[param]["time"].append(current_step)
-                loss_history[param]["values"].append(np.mean(selected_results[param]))
-
+                if not (param == "per_object_loss" or param == "loss"):
+                    loss_history[param]["values"].append(np.mean(selected_results[param]))
+            loss_history["loss"]["values"].append(np.mean(loss.detach().cpu().numpy()))
             running_loss += loss.cpu().item()
             del images
             del counts
             del output
             del loss
+            del selected_results
 
             if current_step % params["vis_every"] == 0:
-                cnn_scheduler.step()
+                if not params["disable_scheduler"]:
+                    cnn_scheduler.step()
                 with torch.no_grad():
                     monet.eval()
                     batch_val_loss_history = {}
                     for param in loss_history.keys():
                         batch_val_loss_history[param] = []
 
-                    a = 0
+                    a = -1
+                    current_loss = 0
                     for val_data in testloader:
+                        a += 1
                         images, counts = val_data
 
                         images = images.to(device)
 
                         output = monet(images)
+
+                        current_loss += torch.mean(output["loss"]).detach().cpu().numpy()
+
                         selected_experts = np.stack(output["selected_expert_per_object"])
                         selected_results = {}
 
@@ -339,7 +382,6 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                                         output["results"][obj][selected_experts[obj][sample]][
                                             key][sample]
                         if a == 0:
-                            a = 1
                             visualize.plot_figure(
                                 recons=np.sum(selected_results["x_recon_t"], axis=0),
                                 originals=images.detach().cpu().numpy(),
@@ -347,42 +389,50 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                                 selected_experts=selected_experts,
                                 recons_steps=selected_results["x_recon_t"],
                                 recons_steps_not_masked=selected_results["x_recon_t_not_masked"],
+                                next_log_s=selected_results["log_s_t"],
+                                mask_recon=selected_results["mask_recon"],
                                 logger=logger)
 
                         for param in loss_history.keys():
-                            batch_val_loss_history[param].append(np.mean(selected_results[param]))
+                            if not (param == "per_object_loss" or param == "loss"):
+                                batch_val_loss_history[param].append(
+                                    np.mean(selected_results[param]))
+                        batch_val_loss_history["loss"].append(
+                            np.mean(output["loss"].detach().cpu().numpy()))
+
+                        # batch_val_loss_history["per_object_loss"].append(
+                        #     np.mean(selected_results["loss_x_t"], axis=1))
                         del images
                         del output
+                        del selected_results
 
                     for param in val_loss_history.keys():
                         val_loss_history[param]["time"].append(current_step)
-                        val_loss_history[param]["values"].append(
-                            np.mean(batch_val_loss_history[param]))
+                        if not (param == "per_object_loss"):
+                            val_loss_history[param]["values"].append(
+                                np.mean(batch_val_loss_history[param]))
 
+                    # val_loss_history["per_object_loss"]["values"].append(
+                    #     np.mean(batch_val_loss_history["per_object_loss"],
+                    #             axis=0))
                     Logger.cluster_log('[%3d, %5d] loss: %.3f' % (
                         epoch + 1, current_step + 1, running_loss / params["vis_every"]))
 
                     running_loss = 0.0
 
-                    fig, ax = plt.subplots(1, len(loss_history.keys()), figsize=(40, 10))
-                    for i, param in enumerate(loss_history.keys()):
-                        ax[i].set_title("{}".format(param))
-                        ax[i].plot(loss_history[param]["time"], loss_history[param]["values"],
-                                   label="Training")
-                        ax[i].plot(val_loss_history[param]["time"],
-                                   val_loss_history[param]["values"],
-                                   label="Validation")
-                        ax[i].legend(frameon=False)
-                    plt.savefig(logger.get_sequential_figure_name("ECON_LOSS"), bbox_inches="tight")
-                    plt.close()
+                    visualize.plot_loss_history(loss_history=loss_history,
+                                                val_loss_history=val_loss_history,
+                                                logger=logger)
 
-                    # plt.show()
-                    if not params["dontstore"]:
-                        torch.save(monet.state_dict(), checkpoint_file)
+                    current_loss /= a
+
+                    if not params["dontstore"] and current_loss < best_loss:
+                        logger.store_checkpoint(model=monet, optimizer=optimizer, steps=current_step)
+                        best_loss = current_loss
+                        Logger.cluster_log("LOSS IMPROVED: {}".format(best_loss))
                     monet.train()
 
             current_step += 1
-
 
     Logger.cluster_log('training done')
 
@@ -391,16 +441,22 @@ def to_float(x):
     return x.float()
 
 
-def sprite_experiment(cfg):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    params = cfg
-    if "device" in params.keys():
-        if params["device"] == "TPU":
-            import torch_xla
-            import torch_xla.core.xla_model as xm
-            device = xm.xla_device()
-    Logger.cluster_log(device)
-    logger = Logger(params=params, version="0.0.1")
+def run_model_training(params, trainloader, logger, testloader=None, model_name="ECON"):
+    if model_name == "genesis":
+        monet = monet_genesis.Monet(cfg=params).to(device)
+        run_training_genesis(monet, params, trainloader, logger=logger, cfg=params)
+    elif model_name == "ECON":
+        monet = econ_model.ECON(params=params).to(device)
+        run_training_ECON(monet=monet, params=params, trainloader=trainloader,
+                          testloader=testloader, logger=logger,
+                          device=device)
+    else:
+        monet = monet_model.Monet(params=params, height=64, width=64).to(device)
+        run_training(monet, params, trainloader, logger=logger)
+
+
+def load_sprite(params):
+
     transform = transforms.Compose([transforms.ToTensor(),
                                     transforms.Lambda(to_float),
                                     ])
@@ -426,26 +482,54 @@ def sprite_experiment(cfg):
                                              batch_size=params["batch_size"],
                                              shuffle=True,
                                              num_workers=0)
-    if params["model_name"] == "genesis":
-        monet = monet_genesis.Monet(cfg=params).to(device)
-        run_training_genesis(monet, params, trainloader, logger=logger, cfg=params)
-    elif params["model_name"] == "ECON":
-        monet = econ_model.ECON(params=params).to(device)
-        run_training_ECON(monet=monet, params=params, trainloader=trainloader,
-                          testloader=testloader, logger=logger,
-                          device=device)
-    else:
-        monet = monet_model.Monet(params=params, height=64, width=64).to(device)
-        run_training(monet, params, trainloader, logger=logger)
+    return trainloader, testloader
+
+
+def load_coinrun(params):
+    transform = transforms.Compose([transforms.ToTensor(),
+                                    transforms.Lambda(to_float),
+                                    ])
+    trainset = datasets.Coinrun(params["data_dir"],
+                                dataset_name=params["dataset_name"],
+                                train=True,
+                                transform=transform)
+    testset = datasets.Coinrun(params["data_dir"],
+                                dataset_name=params["dataset_name"],
+                                train=False,
+                                transform=transform)
+    trainloader = torch.utils.data.DataLoader(trainset,
+                                              batch_size=params["batch_size"],
+                                              shuffle=True,
+                                              num_workers=0)
+    testloader = torch.utils.data.DataLoader(testset,
+                                             batch_size=params["batch_size"],
+                                             shuffle=True,
+                                             num_workers=0)
+    return trainloader, testloader
 
 
 seeds = [42, 24365517, 6948868, 96772882, 58236860, 7111973, 5016789, 19469290, 2384676, 10878630,
          26484779, 78421105, 46346829, 65958905, 69757054, 49361965, 84089155, 85116270, 8707926,
          26474437, 46028029]
 if __name__ == '__main__':
-    cfg = config.load_config()
+    params = config.load_config()
 
-    torch.manual_seed(seeds[cfg["seed"]])
-    np.random.seed(seeds[cfg["seed"]])
+    torch.manual_seed(seeds[params["seed"]])
+    np.random.seed(seeds[params["seed"]])
 
-    sprite_experiment(cfg)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    Logger.cluster_log("DEVICE: {}".format(device))
+    logger = Logger(params=params)
+
+    if params["name_config"] == "ECON_sprite":
+        trainloader, testloader = load_sprite(params)
+    elif params["name_config"] == "ECON_coinrun":
+        trainloader, testloader = load_coinrun(params)
+    else:
+        trainloader, testloader = None, None
+
+    run_model_training(params=params,
+                       trainloader=trainloader,
+                       testloader=testloader,
+                       logger=logger,
+                       model_name=params["model_name"])

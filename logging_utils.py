@@ -1,8 +1,10 @@
 import os
 import uuid
 import sys
+import torch
 
 from datetime import datetime
+
 
 def make_dir(directory_path):
     if not os.path.exists(directory_path):
@@ -30,28 +32,38 @@ def numbers(dirname, prefix):
 
 
 class Logger:
-    def __init__(self, params, version=None):
+    def __init__(self, params, load=False, version=None):
         self.log_dir = params["log_dir"]
-        self.experiment_name = params["exp_name"]
-        if version is not None:
-            self.version = version
+        if load:
+            self.save_dir = os.path.join(self.log_dir, params["exp_folder"])
+            self.figure_dir = os.path.join(self.save_dir, "figures")
+            self.checkpoints_dir = os.path.join(self.save_dir, "checkpoints")
+            params = self.load_parameters()
+            self.experiment_name = params["exp_name"]
         else:
-            self.version = "0.0.1"
-        if params["uuid"]:
-            self.version = self.version + str(uuid.uuid4())
-        self.time_creation = datetime.now()
-        self.save_dir = os.path.join(self.log_dir, self.time_creation.strftime("%Y%m%d%H%M")+"-"+self.experiment_name+"-seed"+str(params["seed"])+"-v"+self.version)
-        self.figure_dir = os.path.join(self.save_dir, "figures")
-        self.checkpoints_dir = os.path.join(self.save_dir, "checkpoints")
+            self.experiment_name = params["exp_name"]
+            if version is not None:
+                self.version = "-v" + str(version)
+            else:
+                self.version = ""
+            if params["uuid"]:
+                self.version = self.version + str(uuid.uuid4())
+            self.time_creation = datetime.now()
+            self.save_dir = os.path.join(self.log_dir, self.time_creation.strftime("%Y%m%d%H%M") +
+                                         "-" + self.experiment_name +
+                                         "-seed" + str(params["seed"]) +
+                                         self.version)
+            self.figure_dir = os.path.join(self.save_dir, "figures")
+            self.checkpoints_dir = os.path.join(self.save_dir, "checkpoints")
 
-        make_dir(self.log_dir)
-        make_dir(self.save_dir)
-        make_dir(self.figure_dir)
-        make_dir(self.checkpoints_dir)
-        with open(os.path.join(self.save_dir, "experiment_params.log"), "w+") as f:
-            for param_name, param_value in params.items():
-                f.write("{}:{}\n".format(param_name,param_value))
-
+            make_dir(self.log_dir)
+            make_dir(self.save_dir)
+            make_dir(self.figure_dir)
+            make_dir(self.checkpoints_dir)
+            with open(os.path.join(self.save_dir, "experiment_params.log"), "w+") as f:
+                for param_name, param_value in params.items():
+                    f.write("{}:{}\n".format(param_name, param_value))
+            torch.save(params, os.path.join(self.checkpoints_dir, "params.torch"))
 
     @staticmethod
     def log(text):
@@ -70,6 +82,32 @@ class Logger:
         count = max(numbers(self.figure_dir, name))
         count += 1
 
-        file_name = os.path.join(self.figure_dir, name+"c"+str(count))
+        file_name = os.path.join(self.figure_dir, name + "c" + str(count))
 
         return file_name
+
+    def store_checkpoint(self, model, optimizer, steps, scheduler=None):
+        file_path = os.path.join(self.checkpoints_dir, "state.torch")
+        state = {
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'steps': steps
+        }
+        if scheduler is not None:
+            state["scheduler"] = scheduler.state_dict()
+
+        torch.save(state, file_path)
+
+    def load_checkpoint(self):
+        file_path = os.path.join(self.checkpoints_dir, "state.torch")
+        if os.path.isfile(file_path):
+            return torch.load(file_path)
+        else:
+            Logger.error("No checkpoint found at: \"{}\"".format(file_path))
+            return None
+
+    def load_parameters(self):
+        return torch.load(os.path.join(self.checkpoints_dir, "params.torch"))
+
+    def store_data(self, data, name="temp.log"):
+        torch.save(data, os.path.join(self.save_dir, name))
