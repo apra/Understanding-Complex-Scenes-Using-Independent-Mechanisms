@@ -38,7 +38,7 @@ def visualize_masks(imgs, masks, recons, logger, title="masks"):
 
 
 def plot_figure(recons, originals, attention_regions, selected_experts, recons_steps,
-                recons_steps_not_masked, logger, next_log_s=None, mask_recon=None):
+                recons_steps_not_masked, logger, next_log_s=None, mask_recon=None, title=None):
     imgs = recons[:8]
     imgs = imgs.transpose((0, 2, 3, 1))
     originals = originals[:8]
@@ -148,11 +148,13 @@ def plot_figure(recons, originals, attention_regions, selected_experts, recons_s
                 axe.set_title("VAE m\nEXP: {}".format(exp))
 
     plt.subplots_adjust(wspace=0.05, hspace=0.15)
-    plt.savefig(logger.get_sequential_figure_name("ECON"), bbox_inches="tight")
+    if title is None:
+        title = "ECON"
+    plt.savefig(logger.get_sequential_figure_name(title), bbox_inches="tight")
     plt.close()
 
 
-def plot_loss_history(loss_history, val_loss_history, logger):
+def plot_loss_history(loss_history, val_loss_history, loss_history_per_object, logger):
     fig, ax = plt.subplots(1, len(loss_history.keys()), figsize=(40, 10))
     for i, param in enumerate(loss_history.keys()):
 
@@ -166,4 +168,16 @@ def plot_loss_history(loss_history, val_loss_history, logger):
                        label="Validation")
         ax[i].legend(frameon=False)
     plt.savefig(logger.get_sequential_figure_name("ECON_LOSS"), bbox_inches="tight")
+    plt.close()
+
+    fig, ax = plt.subplots(1, len(loss_history_per_object.keys()), figsize=(40, 10))
+    for i, param in enumerate(loss_history_per_object.keys()):
+        print(i)
+        ax[i].set_title("{}".format(param))
+        if len(loss_history_per_object[param]["values"]) > 0:
+            for obj in range(len(loss_history_per_object[param]["values"][0])):
+                ax[i].plot(loss_history_per_object[param]["time"], np.array(loss_history_per_object[param]["values"])[:,obj], label="Obj: {}".format(obj))
+
+        ax[i].legend(frameon=False)
+    plt.savefig(logger.get_sequential_figure_name("ECON_LOSS_per_obj"), bbox_inches="tight")
     plt.close()

@@ -32,9 +32,9 @@ def numbers(dirname, prefix):
 
 
 class Logger:
-    def __init__(self, params, load=False, version=None):
+    def __init__(self, params, version=None):
         self.log_dir = params["log_dir"]
-        if load:
+        if params["load"]:
             self.save_dir = os.path.join(self.log_dir, params["exp_folder"])
             self.figure_dir = os.path.join(self.save_dir, "figures")
             self.checkpoints_dir = os.path.join(self.save_dir, "checkpoints")
@@ -89,7 +89,7 @@ class Logger:
     def store_checkpoint(self, model, optimizer, steps, scheduler=None):
         file_path = os.path.join(self.checkpoints_dir, "state.torch")
         state = {
-            'state_dict': model.state_dict(),
+            'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
             'steps': steps
         }

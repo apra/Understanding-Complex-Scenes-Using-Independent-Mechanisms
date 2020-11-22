@@ -55,7 +55,7 @@ class Configuration:
         for param in self.p.values():
             param.add_argument_parser(parser=parser)
         args, namespace = parser.parse_known_args()
-        array_params = []
+        array_params = ["sigmas_x"]
         for name, value in vars(args).items():
             if name == "configuration":
                 continue
@@ -178,17 +178,17 @@ class Configurator:
                                      default=False,
                                      help="Whether to load a previous experiment and keep training for num_steps")
         self.add_param_configuration(name_config="common",
-                                     identifier="experiment_folder",
+                                     identifier="exp_folder",
                                      param_type=str,
                                      default=None,
                                      help="Folder of the experiment where to start from to keep training")
+        self.add_param_configuration(name_config="common",
+                                     identifier="weight_decay",
+                                     param_type=float,
+                                     default=0.,
+                                     help="Weight decay for the optimizer")
 
         self.add_configuration("default")
-        self.add_param_configuration(name_config="default",
-                                     identifier="load_parameters",
-                                     param_type=bool,
-                                     default=False,
-                                     help="Load parameters from checkpoint")
         self.add_param_configuration(name_config="default",
                                      identifier="parallel",
                                      param_type=bool,
@@ -297,9 +297,9 @@ def load_config():
                                           default=0.09,
                                           help="Sigma of the decoder distributions for the first slot")
     config_engine.add_param_configuration(name_config="ECON_sprite",
-                                          identifier="fg_sigma",
-                                          param_type=float,
-                                          default=0.11,
+                                          identifier="sigmas_x",
+                                          param_type=str,
+                                          default="[0.09, 0.11]",
                                           help="Sigma of the decoder distributions for all other slots")
     config_engine.add_param_configuration(name_config="ECON_sprite",
                                           identifier="num_blocks",
@@ -332,15 +332,10 @@ def load_config():
                                           default=3,
                                           help="Channels in the input image")
     config_engine.add_param_configuration(name_config="ECON_sprite",
-                                          identifier="load_parameters",
-                                          param_type=bool,
-                                          default=False,
-                                          help="Load parameters from checkpoint")
-    config_engine.add_param_configuration(name_config="ECON_sprite",
-                                          identifier="disable_scheduler",
-                                          param_type=bool,
-                                          default=False,
-                                          help="Disable the scheduler")
+                                          identifier="scheduler",
+                                          param_type=str,
+                                          default=None,
+                                          help="Type of scheduler: plateau, cosann")
     config_engine.add_param_configuration(name_config="ECON_sprite",
                                           identifier="data_dep_init",
                                           param_type=bool,
@@ -355,17 +350,25 @@ def load_config():
                                           identifier="competition_temperature",
                                           param_type=float,
                                           default=1.,
-                                          help="Temperature in the softmax of the competition between experts. A bigger temeprature means that the experts are more equally likely to be picked")
+                                          help="Temperature in the softmax of the competition "
+                                               "between experts. A bigger temperature means that "
+                                               "the experts are more equally likely to be picked")
     config_engine.add_param_configuration(name_config="ECON_sprite",
                                           identifier="annealing_start",
                                           param_type=int,
                                           default=0,
-                                          help="Starting epoch of the annealing of the parameters beta and gamma in the loss")
+                                          help="Starting epoch of the annealing of the parameters "
+                                               "beta and gamma in the loss")
     config_engine.add_param_configuration(name_config="ECON_sprite",
                                           identifier="annealing_duration",
                                           param_type=int,
                                           default=200,
                                           help="Number of steps that the annealing phase lasts for")
+    config_engine.add_param_configuration(name_config="ECON_sprite",
+                                          identifier="latent_dim",
+                                          param_type=int,
+                                          default=2,
+                                          help="Dimension of the latent space in the VAE")
 
     config_engine.add_configuration("ECON_coinrun")
     config_engine.add_param_configuration(name_config="ECON_coinrun",
@@ -394,9 +397,9 @@ def load_config():
                                           default=0.09,
                                           help="Sigma of the decoder distributions for the first slot")
     config_engine.add_param_configuration(name_config="ECON_coinrun",
-                                          identifier="fg_sigma",
-                                          param_type=float,
-                                          default=0.11,
+                                          identifier="sigmas_x",
+                                          param_type=str,
+                                          default="[0.09, 0.11]",
                                           help="Sigma of the decoder distributions for all other slots")
     config_engine.add_param_configuration(name_config="ECON_coinrun",
                                           identifier="num_objects",
@@ -409,6 +412,11 @@ def load_config():
                                           default=3,
                                           help="Number of experts")
     config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="scheduler",
+                                          param_type=str,
+                                          default=None,
+                                          help="Type of scheduler: plateau, cosann")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
                                           identifier="channel_base",
                                           param_type=int,
                                           default=64,
@@ -418,16 +426,6 @@ def load_config():
                                           param_type=int,
                                           default=3,
                                           help="Channels in the input image")
-    config_engine.add_param_configuration(name_config="ECON_coinrun",
-                                          identifier="load_parameters",
-                                          param_type=bool,
-                                          default=False,
-                                          help="Load parameters from checkpoint")
-    config_engine.add_param_configuration(name_config="ECON_coinrun",
-                                          identifier="disable_scheduler",
-                                          param_type=bool,
-                                          default=False,
-                                          help="Disable the scheduler")
     config_engine.add_param_configuration(name_config="ECON_coinrun",
                                           identifier="data_dep_init",
                                           param_type=bool,
@@ -442,12 +440,15 @@ def load_config():
                                           identifier="competition_temperature",
                                           param_type=float,
                                           default=1.,
-                                          help="Temperature in the softmax of the competition between experts. A bigger temeprature means that the experts are more equally likely to be picked")
+                                          help="Temperature in the softmax of the competition "
+                                               "between experts. A bigger temperature means that "
+                                               "the experts are more equally likely to be picked")
     config_engine.add_param_configuration(name_config="ECON_coinrun",
                                           identifier="annealing_start",
                                           param_type=int,
                                           default=0,
-                                          help="Starting epoch of the annealing of the parameters beta and gamma in the loss")
+                                          help="Starting epoch of the annealing of the parameters "
+                                               "beta and gamma in the loss")
     config_engine.add_param_configuration(name_config="ECON_coinrun",
                                           identifier="annealing_duration",
                                           param_type=int,

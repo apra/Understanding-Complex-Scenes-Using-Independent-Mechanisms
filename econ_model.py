@@ -118,12 +118,12 @@ class SimpleSBP(nn.Module):
 
 
 class ExpertDecoder(nn.Module):
-    def __init__(self, height, width):
+    def __init__(self, height, width, ldim=16):
         super().__init__()
         self.height = height
         self.width = width
         self.convs = nn.Sequential(
-            nn.Conv2d(18, 32, kernel_size=3),
+            nn.Conv2d(ldim+2, 32, kernel_size=3),
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 32, kernel_size=3),
             nn.ReLU(inplace=True),
@@ -148,7 +148,7 @@ class ExpertDecoder(nn.Module):
 
 
 class ExpertEncoder(nn.Module):
-    def __init__(self, width, height):
+    def __init__(self, width, height, ldim=16):
         super().__init__()
         self.convs = nn.Sequential(
             nn.Conv2d(4, 32, 3, stride=2),
@@ -168,7 +168,7 @@ class ExpertEncoder(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(64 * width * height, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(256, 32)
+            nn.Linear(256, 2*ldim)
         )
 
     def forward(self, x):
@@ -186,10 +186,10 @@ class ComponentVAE(nn.Module):
 
     def __init__(self, sigma=0.7, params=None):
         super(ComponentVAE, self).__init__()
-        self.ldim = 16  # paper uses 16
+        self.ldim = params["latent_dim"]  # paper uses 16
         # Sub-Modules
-        self.encoder_module = ExpertEncoder(height=64, width=64)
-        self.decoder_module = ExpertDecoder(height=64, width=64)
+        self.encoder_module = ExpertEncoder(height=64, width=64, ldim=self.ldim)
+        self.decoder_module = ExpertDecoder(height=64, width=64, ldim=self.ldim)
         self.sigma = sigma
 
     def forward(self, x, log_r):
@@ -262,16 +262,14 @@ class Expert(nn.Module):
         # - Attention Network
         self.attention = SimpleSBP(params)
         # - Component VAE
-        self.comp_vae = ComponentVAE()
-        # Initialise pixel output standard deviations
-        self.sigma = params["fg_sigma"]
+        self.comp_vae = ComponentVAE(params=params)
 
         self.lambda_competitive = params["lambda_competitive"]
 
         self.beta_loss = params["beta_loss"]
         self.gamma_loss = params["gamma_loss"]
 
-    def forward(self, x, log_s_t, last_object=False):
+    def forward(self, x, log_s_t, sigma_x, last_object=False):
         """
         Args:
             x: Input images [B, C, H, W]
@@ -300,7 +298,7 @@ class Expert(nn.Module):
         p_r_t = dists.Bernoulli(probs=prob_r_t_pred)
         q_psi_t = dists.Bernoulli(probs=prob_log_r_t)
 
-        raw_loss_x_t = (log_r_t.exp() / (2 * self.sigma * self.sigma)) * torch.square(
+        raw_loss_x_t = (log_r_t.exp() / (2 * sigma_x * sigma_x)) * torch.square(
             x - log_mu_x.exp())
         raw_loss_z_t = vae_results["kl"]
         raw_loss_r_t = kl_divergence(q_psi_t, p_r_t)
@@ -310,7 +308,7 @@ class Expert(nn.Module):
         loss_r_t = torch.sum(raw_loss_r_t, [1, 2, 3])  # sum over all pixels and channels
 
         # the reconstruction, scope*predicted shape*mean of output
-        x_recon_t = (log_s_t + log_m_pred_t + log_mu_x).exp()
+        x_recon_t = (log_s_t + log_r_t + log_mu_x).exp()
 
         # region the attention network is looking at
         region_attention = log_r_t.exp()
@@ -338,7 +336,7 @@ class Expert(nn.Module):
             "region_attention": region_attention,
             "mask_recon": mask_recon,
             "log_s_t": log_s_t,
-            "competition_objective": -1 * (self.lambda_competitive * loss_x_t + loss_r_t)
+            "competition_objective": -1 * (self.lambda_competitive * loss_x_t + loss_r_t + 0.*torch.mean(region_attention,dim=(1,2,3)))
         }
 
     def get_features(self, image_batch):
@@ -374,6 +372,44 @@ class ECON(nn.Module):
         self.beta_loss = params["beta_loss"]
         self.gamma_loss = params["gamma_loss"]
 
+        # Initialise pixel output standard deviations
+        self.sigmas_x = params["sigmas_x"]
+
+    def run_single_expert(self, x, expert_id, beta=None, gamma=None):
+        if beta is not None:
+            self.beta_loss = beta
+        if gamma is not None:
+            self.gamma_loss = gamma
+
+        collected_results = []
+        selected_expert_per_object = []
+
+        log_scopes = [torch.zeros_like(x[:, 0:1])]
+
+        for obj in range(self.num_objects):
+            results_expert = self.experts[expert_id](x, log_scopes[-1], self.sigmas_x[obj],
+                                                     last_object=(obj == (self.num_objects - 1)))
+
+            # compute the overall loss
+            loss_object = results_expert["loss_x_t"] + \
+                          self.gamma_loss * results_expert["loss_r_t"] + \
+                          self.beta_loss * results_expert["loss_z_t"]
+
+            collected_results.append(all_to_cpu(results_expert))
+
+            if obj == 0:
+                loss = loss_object
+            else:
+                loss += loss_object
+
+            log_scopes.append(results_expert["next_log_s_t"])
+
+        return {
+            "loss": loss,
+            "results": collected_results,
+            "selected_expert_per_object": selected_expert_per_object
+        }
+
     def forward(self, x, beta=None, gamma=None):
         if beta is not None:
             self.beta_loss = beta
@@ -394,14 +430,16 @@ class ECON(nn.Module):
             losses = []
             results = []
             candidate_scopes = []
+            candidate_attentions = []
             for j, expert in enumerate(self.experts):
                 # run the expert
-                results_expert = expert(x, log_scopes[-1],
+                results_expert = expert(x, log_scopes[-1], self.sigmas_x[obj],
                                         last_object=(obj == (self.num_objects - 1)))
 
                 # collect the gradient-related results
                 competition_results.append(results_expert["competition_objective"])
                 candidate_scopes.append(results_expert["next_log_s_t"])
+                candidate_attentions.append(results_expert["region_attention"])
 
                 # compute the overall loss
                 losses.append(results_expert["loss_x_t"] +
@@ -419,9 +457,11 @@ class ECON(nn.Module):
 
             if self.num_experts == 1:
                 selected_expert = torch.zeros((batch_size,), dtype=torch.long)
+                probs = torch.ones((batch_size,), dtype=torch.float)
             else:
-                decision = dists.Categorical(probs=F.softmax(
-                    torch.stack(competition_results, dim=1) / self.competition_temperature, dim=1))
+                probs = F.softmax(
+                    torch.stack(competition_results, dim=1) / self.competition_temperature, dim=1)
+                decision = dists.Categorical(probs=probs)
                 selected_expert = decision.sample()
 
             selected_expert_per_object.append(selected_expert.cpu().numpy())
@@ -432,7 +472,21 @@ class ECON(nn.Module):
                 loss += losses[selected_expert, indexes]
             # update the next scope for the network
             candidate_scopes = torch.stack(candidate_scopes, dim=0)
+
             log_scopes.append(candidate_scopes[selected_expert, indexes])
+
+            # if self.num_experts > 1:
+            #     experts_sorted = torch.argsort(probs, descending=True)
+            #
+            #     candidate_attentions = torch.stack(candidate_attentions, dim=0)
+            #     for i in range(self.num_experts):
+            #         attention = candidate_attentions[i]
+            #
+            #         winning_attention = candidate_attentions[selected_expert, indexes].clone().detach()
+            #
+            #         loss -= self.punish_factor*torch.nn.BCELoss(reduction="sum")(attention, winning_attention)/(self.num_experts-1)
+
+
             # print(next_scopes.shape, scope.shape)
 
         return {
