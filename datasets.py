@@ -60,7 +60,7 @@ def make_sprites(n=50000, height=64, width=64, background="random", min_num_objs
     print(n)
     images = np.zeros((n, height, width, 3))
     counts = np.zeros((n,))
-    min_size = 20
+    min_size = 16
     print('Generating sprite dataset...')
 
     for i in range(n):

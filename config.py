@@ -459,6 +459,11 @@ def load_config():
                                           param_type=str,
                                           default="coirun_dataset_train.hdf5",
                                           help="Name of the file where the dataset is located")
+    config_engine.add_param_configuration(name_config="ECON_coinrun",
+                                          identifier="latent_dim",
+                                          param_type=int,
+                                          default=2,
+                                          help="Dimension of the latent space in the VAE")
 
     name_config, cfgs = config_engine.parse()
 

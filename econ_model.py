@@ -265,6 +265,7 @@ class Expert(nn.Module):
         self.comp_vae = ComponentVAE(params=params)
 
         self.lambda_competitive = params["lambda_competitive"]
+        print(self.lambda_competitive)
 
         self.beta_loss = params["beta_loss"]
         self.gamma_loss = params["gamma_loss"]
@@ -336,7 +337,7 @@ class Expert(nn.Module):
             "region_attention": region_attention,
             "mask_recon": mask_recon,
             "log_s_t": log_s_t,
-            "competition_objective": -1 * (self.lambda_competitive * loss_x_t + loss_r_t + 0.*torch.mean(region_attention,dim=(1,2,3)))
+            "competition_objective": -1 * (self.lambda_competitive * loss_x_t + loss_r_t)# + 1.*torch.var(log_mu_x,dim=(1,2,3)))
         }
 
     def get_features(self, image_batch):
@@ -376,10 +377,12 @@ class ECON(nn.Module):
         self.sigmas_x = params["sigmas_x"]
 
     def run_single_expert(self, x, expert_id, beta=None, gamma=None):
+        beta_loss = self.beta_loss
+        gamma_loss = self.gamma_loss
         if beta is not None:
-            self.beta_loss = beta
+            beta_loss = beta
         if gamma is not None:
-            self.gamma_loss = gamma
+            gamma_loss = gamma
 
         collected_results = []
         selected_expert_per_object = []
@@ -392,8 +395,8 @@ class ECON(nn.Module):
 
             # compute the overall loss
             loss_object = results_expert["loss_x_t"] + \
-                          self.gamma_loss * results_expert["loss_r_t"] + \
-                          self.beta_loss * results_expert["loss_z_t"]
+                          gamma_loss * results_expert["loss_r_t"] + \
+                          beta_loss * results_expert["loss_z_t"]
 
             collected_results.append(all_to_cpu(results_expert))
 
@@ -411,10 +414,12 @@ class ECON(nn.Module):
         }
 
     def forward(self, x, beta=None, gamma=None):
+        beta_loss = self.beta_loss
+        gamma_loss = self.gamma_loss
         if beta is not None:
-            self.beta_loss = beta
+            beta_loss = beta
         if gamma is not None:
-            self.gamma_loss = gamma
+            gamma_loss = gamma
 
         batch_size = x.shape[0]
 
@@ -443,8 +448,8 @@ class ECON(nn.Module):
 
                 # compute the overall loss
                 losses.append(results_expert["loss_x_t"] +
-                              self.gamma_loss * results_expert["loss_r_t"] +
-                              self.beta_loss * results_expert["loss_z_t"])
+                              gamma_loss * results_expert["loss_r_t"] +
+                              beta_loss * results_expert["loss_z_t"])
 
                 # collect the non-gradient related results to analyze performance
                 results.append(all_to_cpu(results_expert))
@@ -474,6 +479,11 @@ class ECON(nn.Module):
             candidate_scopes = torch.stack(candidate_scopes, dim=0)
 
             log_scopes.append(candidate_scopes[selected_expert, indexes])
+
+            # candidate_attentions = torch.stack(candidate_attentions, dim=0)
+            # winning_attention = candidate_attentions[selected_expert, indexes]
+
+            #loss += self.punish_factor*torch.nn.BCELoss(reduction="sum")(winning_attention, torch.ones_like(winning_attention))
 
             # if self.num_experts > 1:
             #     experts_sorted = torch.argsort(probs, descending=True)

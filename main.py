@@ -294,6 +294,7 @@ def copyParams(module_src, module_dest):
         if name in dict_dest:
             dict_dest[name].data.copy_(param.data)
 
+
 def run_training_ECON(monet, params, trainloader, testloader, logger, device):
     assert params["num_objects"] == len(params["sigmas_x"])
     # initialize the optimizer
@@ -316,7 +317,7 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
     else:
         if params["data_dep_init"]:
             # initialize network:
-            steps = 2
+            steps = 500
             for i, data in enumerate(trainloader):
                 if i > steps:
                     break
@@ -333,13 +334,9 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                 loss.backward()
                 optimizer.step()
 
-            for expert_id in range(1,params["num_experts"]):
+            for expert_id in range(1, params["num_experts"]):
                 copyParams(monet.experts[0], monet.experts[expert_id])
 
-            for expert_id in range(1, params["num_experts"]):
-                for name, param in monet.experts[0].named_parameters():
-                    if (torch.sum(dict(monet.experts[expert_id].named_parameters())[name].data == param.data).item() != np.prod(param.data.shape)):
-                        print(name)
             x, _ = next(iter(trainloader))
             x = x.to(device)
             for expert_id in range(0, params["num_experts"]):
@@ -471,6 +468,8 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                     current_loss = 0
                     for val_data in testloader:
                         a += 1
+                        if a > max(current_step, params["vis_every"]):
+                            break
                         images, counts = val_data
 
                         images = images.to(device)
@@ -543,9 +542,11 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                     Logger.cluster_log('[%3d, %5d] val loss: %.3f' % (
                         epoch + 1, current_step + 1, current_loss))
 
-                    if not params["dontstore"] and current_loss < best_loss:
+                    if not params["dontstore"]:
                         logger.store_checkpoint(model=monet, optimizer=optimizer,
                                                 steps=current_step)
+
+                    if current_loss < best_loss:
                         best_loss = current_loss
                         Logger.cluster_log("LOSS IMPROVED: {}".format(best_loss))
 

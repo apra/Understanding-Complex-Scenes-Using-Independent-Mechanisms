@@ -28,6 +28,7 @@ import ast
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 Logger.cluster_log(device)
 
+
 def to_float(x):
     return x.float()
 
@@ -82,6 +83,8 @@ def load_coinrun(params):
                                              shuffle=True,
                                              num_workers=0)
     return trainloader, testloader
+
+
 def store_average_progress(input, output, time, axis, avoid=[]):
     for param in output.keys():
         output[param]["time"].append(time)
@@ -103,7 +106,35 @@ def get_selected_params(output, selected_experts):
                     sample]
     return selected_results
 
+
 import seaborn as sns
+
+
+def show_segmentation_mask(attentions, selected_experts, recons_t, originals, color_map):
+    empty_image = np.zeros((3,attentions.shape[3], attentions.shape[4]))
+    object_colors = {
+
+    }
+    for expert, color in color_map.items():
+        object_colors[expert] = empty_image.copy()
+        object_colors[expert][0,:] = color[0]
+        object_colors[expert][1,:] = color[1]
+        object_colors[expert][2,:] = color[2]
+
+    final_image = np.zeros_like(empty_image)
+    for image_id in range(attentions.shape[1]):
+        fig, ax = plt.subplots(1,2)
+        for object in range(len(attentions)):
+            final_image += attentions[object][image_id]*object_colors[selected_experts[object][image_id]]*(recons_t[object][image_id]>1e-1)
+        ax[0].imshow(np.moveaxis(final_image,0,2))
+        ax[1].imshow(originals[image_id].transpose((1, 2, 0)))
+        plt.show()
+        plt.pause(0.1)
+        plt.close(fig)
+        final_image = np.zeros_like(empty_image)
+    print(attentions)
+
+
 def test_generalization(params, num_objects, logger):
     monet = econ_model.ECON(params=params).to(device)
     state = logger.load_checkpoint()
@@ -127,7 +158,7 @@ def test_generalization(params, num_objects, logger):
     current_step = -1
     for data in trainloader:
         current_step += 1
-        if current_step > 10:
+        if current_step > params["num_samples"]:
             break
         images, counts = data
         images = images.to(device)
@@ -156,7 +187,13 @@ def test_generalization(params, num_objects, logger):
                                time=current_step,
                                axis=1)
 
-        #if current_step == 0:
+        # if current_step == 0:
+        color_map = {}
+        available_colors = [[1, 0, 0],[0, 1, 0],[0, 0, 1], [1, 1, 0], [1, 0, 1]]
+        for expert in range(params["num_experts"]):
+            color_map[expert] = available_colors[expert]
+        show_segmentation_mask(attentions=selected_results["region_attention"],
+                               selected_experts=selected_experts, recons_t=selected_results["x_recon_t"], color_map=color_map, originals=images.detach().cpu().numpy())
         visualize.plot_figure(
             recons=np.sum(selected_results["x_recon_t"], axis=0),
             originals=images.detach().cpu().numpy(),
@@ -223,7 +260,7 @@ if __name__ == '__main__':
     dataset_name = params["dataset_name"]
 
     # select the available device
-    device = torch.device("cpu") #torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
     Logger.cluster_log("DEVICE: {}".format(device))
 
     # initialize the logger
@@ -237,7 +274,7 @@ if __name__ == '__main__':
     params["min_num_objs"] = min_num_objs
     params["dataset_name"] = dataset_name
 
-    sigmas_x = [1]*num_objects
+    sigmas_x = [1] * num_objects
     params["sigmas_x"] = sigmas_x
 
     torch.manual_seed(seeds[params["seed"]])
@@ -250,5 +287,4 @@ if __name__ == '__main__':
     else:
         trainloader, testloader = None, None
 
-    test_generalization(params, num_objects,logger)
-
+    test_generalization(params, num_objects, logger)
