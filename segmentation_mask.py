@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import argparse
 import string
 import ast
+import metric
 
 # vis = visdom.Visdom()
 
@@ -109,30 +110,7 @@ def get_selected_params(output, selected_experts):
 
 import seaborn as sns
 
-
-def show_segmentation_mask(attentions, selected_experts, recons_t, originals, color_map):
-    empty_image = np.zeros((3,attentions.shape[3], attentions.shape[4]))
-    object_colors = {
-
-    }
-    for expert, color in color_map.items():
-        object_colors[expert] = empty_image.copy()
-        object_colors[expert][0,:] = color[0]
-        object_colors[expert][1,:] = color[1]
-        object_colors[expert][2,:] = color[2]
-
-    final_image = np.zeros_like(empty_image)
-    for image_id in range(attentions.shape[1]):
-        fig, ax = plt.subplots(1,2)
-        for object in range(len(attentions)):
-            final_image += attentions[object][image_id]*object_colors[selected_experts[object][image_id]]*(recons_t[object][image_id]>1e-1)
-        ax[0].imshow(np.moveaxis(final_image,0,2))
-        ax[1].imshow(originals[image_id].transpose((1, 2, 0)))
-        plt.show()
-        plt.pause(0.1)
-        plt.close(fig)
-        final_image = np.zeros_like(empty_image)
-    print(attentions)
+import itertools
 
 
 def test_generalization(params, num_objects, logger):
@@ -156,11 +134,13 @@ def test_generalization(params, num_objects, logger):
         "competition_objective": {"values": [], "time": []},
     }
     current_step = -1
+    scores = []
+    selected_object_per_expert = None
     for data in trainloader:
         current_step += 1
         if current_step > params["num_samples"]:
             break
-        images, counts = data
+        images, segmentation_mask = data
         images = images.to(device)
         # forward pass
         output = monet(images, 0, 0)
@@ -188,12 +168,21 @@ def test_generalization(params, num_objects, logger):
                                axis=1)
 
         # if current_step == 0:
-        color_map = {}
-        available_colors = [[1, 0, 0],[0, 1, 0],[0, 0, 1], [1, 1, 0], [1, 0, 1]]
-        for expert in range(params["num_experts"]):
-            color_map[expert] = available_colors[expert]
-        show_segmentation_mask(attentions=selected_results["region_attention"],
-                               selected_experts=selected_experts, recons_t=selected_results["x_recon_t"], color_map=color_map, originals=images.detach().cpu().numpy())
+        batch_scores, batch_selected_object_per_expert = \
+            metric.compute_segmentation_covering_expert_score(params=params,
+                                                              attentions=selected_results[
+                                                                  "region_attention"],
+                                                              selected_experts=selected_experts,
+                                                              recons_t=selected_results[
+                                                                  "x_recon_t"],
+                                                              segmentation_mask=segmentation_mask.detach().cpu().numpy())
+        scores.extend(list(batch_scores))
+        if selected_object_per_expert is None:
+            selected_object_per_expert = batch_selected_object_per_expert.astype(int)
+        else:
+            selected_object_per_expert = np.hstack((selected_object_per_expert,batch_selected_object_per_expert)).astype(int)
+
+
         visualize.plot_figure(
             recons=np.sum(selected_results["x_recon_t"], axis=0),
             originals=images.detach().cpu().numpy(),
@@ -205,6 +194,27 @@ def test_generalization(params, num_objects, logger):
             mask_recon=selected_results["mask_recon"],
             logger=logger,
             title="generalization")
+    if params["name_config"] == "ECON_sprite":
+        segmentation_colors = [ "Green", "Blue", "Red"]
+    elif params["name_config"] == "ECON_coinrun":
+        segmentation_colors = ["Main Character","Boxes", "Ground", "Enemies"]
+    else:
+        segmentation_colors = [[1, 0, 0], [0, 0, 1], [0, 1, 0]]
+    fig, ax = plt.subplots(params["num_experts"], 1,
+                           figsize=(4, 2 * params["num_experts"]))
+    bins = np.array(range(1, np.max(selected_object_per_expert) + 2)) - 0.5
+    plt.title("Training steps: {}".format(current_step))
+    for i in range(params["num_experts"]):
+        ax[i].set_title(
+            "Distribution of objects for expert {}".format(i))
+        sns.distplot(selected_object_per_expert[i], bins=bins, ax=ax[i],
+                     norm_hist=True, kde=False)
+        ax[i].set_xticks((bins[:-1] + 0.5).astype(int))
+        ax[i].set_xticklabels(segmentation_colors)
+    plt.subplots_adjust(hspace=0.5)
+    plt.savefig(logger.get_sequential_figure_name("selected_objects_per_expert"),
+                bbox_inches="tight")
+    plt.close()
 
 
 seeds = [42, 24365517, 6948868, 96772882, 58236860, 7111973, 5016789, 19469290, 2384676, 10878630,

@@ -111,3 +111,7 @@ class Logger:
 
     def store_data(self, data, name="temp.log"):
         torch.save(data, os.path.join(self.save_dir, name))
+
+    def log_to_file(self, string, name="temp.log"):
+        with open(os.path.join(self.save_dir, name), "a+") as f:
+            f.write(string)

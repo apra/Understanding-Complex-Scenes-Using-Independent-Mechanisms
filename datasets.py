@@ -182,7 +182,7 @@ class Sprites(Dataset):
         img = self.images[idx]
         if self.transform is not None:
             img = self.transform(img)
-        return img, self.counts[idx]
+        return img, img
 
 
 class Coinrun(Dataset):
@@ -193,6 +193,10 @@ class Coinrun(Dataset):
 
         self.transform = transform
         self.images = data['x_train'][:] if train else data['x_test'][:]
+        if "y_train" in data.keys():
+            self.segmentation_mask = data['y_train'][:] if train else data['y_test'][:]
+        else:
+            self.segmentation_mask = None
         print(self.images.shape)
 
     def __len__(self):
@@ -200,9 +204,14 @@ class Coinrun(Dataset):
 
     def __getitem__(self, idx):
         img = self.images[idx]
+        y = torch.tensor([])
+        if self.segmentation_mask is not None:
+            y = self.segmentation_mask[idx]
+            if self.transform is not None:
+                y = self.transform(y)
         if self.transform is not None:
             img = self.transform(img)
-        return img, torch.empty([])
+        return img, y
 
 
 class Clevr(Dataset):

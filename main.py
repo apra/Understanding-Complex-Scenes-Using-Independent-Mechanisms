@@ -18,6 +18,7 @@ from logging_utils import Logger
 import visualize
 
 import matplotlib.pyplot as plt
+import metric
 
 # vis = visdom.Visdom()
 
@@ -317,7 +318,7 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
     else:
         if params["data_dep_init"]:
             # initialize network:
-            steps = 500
+            steps = 5
             for i, data in enumerate(trainloader):
                 if i > steps:
                     break
@@ -454,6 +455,8 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                     cnn_scheduler.step()
 
                 with torch.no_grad():
+                    scores = []
+                    selected_object_per_expert = None
                     monet.eval()
 
                     selected_expert_per_object_frequency = []
@@ -470,7 +473,7 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                         a += 1
                         if a > max(current_step, params["vis_every"]):
                             break
-                        images, counts = val_data
+                        images, segmentation_mask = val_data
 
                         images = images.to(device)
 
@@ -481,7 +484,24 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                         selected_experts = np.stack(output["selected_expert_per_object"])
                         for i, exps in enumerate(output["selected_expert_per_object"]):
                             selected_expert_per_object_frequency[i].extend(exps)
+
+                        # get results for selected experts
                         selected_results = get_selected_params(output, selected_experts)
+
+                        if len(segmentation_mask)>0:
+                            batch_scores, batch_selected_object_per_expert = \
+                                metric.compute_segmentation_covering_expert_score(params=params,
+                                                                                  attentions=selected_results["region_attention"],
+                                                                                  selected_experts=selected_experts,
+                                                                                  recons_t=selected_results["x_recon_t"],
+                                                                                  segmentation_mask=segmentation_mask.detach().cpu().numpy())
+                            scores.extend(list(batch_scores))
+
+                            if selected_object_per_expert is None:
+                                selected_object_per_expert = batch_selected_object_per_expert.astype(int)
+                            else:
+                                selected_object_per_expert = np.hstack((selected_object_per_expert,batch_selected_object_per_expert)).astype(int)
+
 
                         if a == 0:
                             visualize.plot_figure(
@@ -508,6 +528,10 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                         del output
                         del selected_results
 
+                    # find the best score, this is the current score of the model
+                    logger.log_to_file("{}: {}\n".format(current_step, np.mean(scores)), "segmentation_score.log")
+                    print("MAX SCORE: {}".format(np.max(scores)))
+
                     store_average_progress(batch_val_loss_history,
                                            val_loss_history,
                                            time=current_step,
@@ -533,6 +557,28 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                         ax[i].set_xticks((bins[:-1] + 0.5).astype(int))
                     plt.subplots_adjust(hspace=0.5)
                     plt.savefig(logger.get_sequential_figure_name("selected_experts_histogram"),
+                                bbox_inches="tight")
+                    plt.close()
+
+                    if params["name_config"] == "ECON_sprite":
+                        segmentation_colors = ["Green", "Blue", "Red"]
+                    elif params["name_config"] == "ECON_coinrun":
+                        segmentation_colors = ["Main Character", "Boxes", "Ground", "Enemies"]
+                    else:
+                        segmentation_colors = [[1, 0, 0], [0, 0, 1], [0, 1, 0]]
+                    fig, ax = plt.subplots(params["num_experts"], 1,
+                                           figsize=(4, 2 * params["num_experts"]))
+                    bins = np.array(range(1, np.max(selected_object_per_expert) + 2)) - 0.5
+                    plt.title("Training steps: {}".format(current_step))
+                    for i in range(params["num_experts"]):
+                        ax[i].set_title(
+                            "Distribution of objects for expert {}".format(i))
+                        sns.distplot(selected_object_per_expert[i], bins=bins, ax=ax[i],
+                                     norm_hist=True, kde=False)
+                        ax[i].set_xticks((bins[:-1] + 0.5).astype(int))
+                        ax[i].set_xticklabels(segmentation_colors)
+                    plt.subplots_adjust(hspace=0.5)
+                    plt.savefig(logger.get_sequential_figure_name("selected_objects_per_expert"),
                                 bbox_inches="tight")
                     plt.close()
 
