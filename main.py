@@ -318,7 +318,7 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
     else:
         if params["data_dep_init"]:
             # initialize network:
-            steps = 5
+            steps = 1
             for i, data in enumerate(trainloader):
                 if i > steps:
                     break
@@ -561,7 +561,7 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                     plt.close()
 
                     if params["name_config"] == "ECON_sprite":
-                        segmentation_colors = ["Green", "Blue", "Red"]
+                        segmentation_colors = ["Red", "Blue", "Green"]
                     elif params["name_config"] == "ECON_coinrun":
                         segmentation_colors = ["Main Character", "Boxes", "Ground", "Enemies"]
                     else:

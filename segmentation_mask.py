@@ -195,9 +195,9 @@ def test_generalization(params, num_objects, logger):
             logger=logger,
             title="generalization")
     if params["name_config"] == "ECON_sprite":
-        segmentation_colors = [ "Green", "Blue", "Red"]
+        segmentation_colors = ["Red", "Blue", "Green"]
     elif params["name_config"] == "ECON_coinrun":
-        segmentation_colors = ["Main Character","Boxes", "Ground", "Enemies"]
+        segmentation_colors = ["Main Character", "Boxes", "Ground", "Enemies"]
     else:
         segmentation_colors = [[1, 0, 0], [0, 0, 1], [0, 1, 0]]
     fig, ax = plt.subplots(params["num_experts"], 1,
@@ -207,7 +207,7 @@ def test_generalization(params, num_objects, logger):
     for i in range(params["num_experts"]):
         ax[i].set_title(
             "Distribution of objects for expert {}".format(i))
-        sns.distplot(selected_object_per_expert[i], bins=bins, ax=ax[i],
+        sns.distplot(selected_object_per_expert[i][selected_object_per_expert[i]>0], bins=bins, ax=ax[i],
                      norm_hist=True, kde=False)
         ax[i].set_xticks((bins[:-1] + 0.5).astype(int))
         ax[i].set_xticklabels(segmentation_colors)
@@ -215,6 +215,8 @@ def test_generalization(params, num_objects, logger):
     plt.savefig(logger.get_sequential_figure_name("selected_objects_per_expert"),
                 bbox_inches="tight")
     plt.close()
+
+    logger.log_to_file("{}\n".format(np.mean(scores)), "segmentation_score.log")
 
 
 seeds = [42, 24365517, 6948868, 96772882, 58236860, 7111973, 5016789, 19469290, 2384676, 10878630,
@@ -283,6 +285,7 @@ if __name__ == '__main__':
     params["max_num_objs"] = max_num_objs
     params["min_num_objs"] = min_num_objs
     params["dataset_name"] = dataset_name
+    params["batch_size"] = 4
 
     sigmas_x = [1] * num_objects
     params["sigmas_x"] = sigmas_x

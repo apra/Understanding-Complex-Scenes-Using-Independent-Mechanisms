@@ -104,21 +104,26 @@ def compute_segmentation_covering_expert_score(params, attentions, selected_expe
 
     expert_segmentation = np.zeros((batch_size, 1, width, height))
     for object in range(num_objects):
-        print(selected_experts[object])
         selected_experts_id = np.expand_dims(np.repeat(np.expand_dims(np.repeat(expert_id[selected_experts[object]],64,axis=1),1),64,axis=1),1)
         foreground = np.expand_dims(np.any((recons_t[object] > 1e-1),axis=1),1)
         partial = (attentions[object] >= 0.5) * selected_experts_id * foreground
 
         expert_segmentation += partial
 
-    ground_truth_objects = convert_image_to_segmentation_mask(np.moveaxis(segmentation_mask, 1, 3),segmentation_colors)
+    fig,ax = plt.subplots()
+    ax.imshow(expert_segmentation[0].transpose(1,2,0))
+    plt.show()
+
+    ground_truth_objects = convert_image_to_segmentation_mask(segmentation_mask.transpose(0,2,3,1),segmentation_colors)
     scores = np.zeros((batch_size, ))
     total_area = np.zeros((batch_size, ))
 
     expert_predicted_object = np.zeros((num_experts,batch_size))
 
     for expert_id in range(1, int(np.max(expert_segmentation))+1):
-        pred_obj_region = expert_segmentation == expert_id
+        pred_obj_region = expert_segmentation.transpose(0,2,3,1) == expert_id
+        if np.sum(pred_obj_region) == 0:
+            continue
 
         N = np.expand_dims(np.sum(pred_obj_region, axis=(1,2,3)),1)
 
@@ -126,6 +131,8 @@ def compute_segmentation_covering_expert_score(params, attentions, selected_expe
         best_objects = np.zeros((batch_size, 1))
         for ground_truth_object_id in range(1, int(np.max(ground_truth_objects))+1):
             gt_obj_region = ground_truth_objects == ground_truth_object_id
+            if np.sum(gt_obj_region) == 0:
+                continue
             iou = iou_binary(gt_obj_region, pred_obj_region)
             best_objects = np.where(np.greater(np.squeeze(iou), np.squeeze(best_iou)),
                                     ground_truth_object_id, np.squeeze(best_objects))
