@@ -1,239 +1,17 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
 import torch.optim as optim
-import numpy as np
-# import visdom
+import torchvision.transforms as transforms
 
-import os
-
-import monet_model
-import monet_genesis
-import econ_model
-import datasets
 import config
-
-from logging_utils import Logger
-import visualize
-
-import matplotlib.pyplot as plt
+import datasets
+import econ_model
 import metric
-
-# vis = visdom.Visdom()
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-Logger.cluster_log(device)
-
-
-def numpify(tensor):
-    return tensor.cpu().detach().numpy()
-
-
-def to_np(x):
-    """
-    Converts to numpy and puts in cpu, handles lists and numpy arrays as well, converts them to numpy array
-    of numpy arrays.
-    Args:
-        x: input list of tensors
-
-    Returns:
-        the numpy'ed tensor list
-    """
-    if isinstance(x, (list, np.ndarray)):
-        for i, item in enumerate(x):
-            try:
-                x[i] = x[i].detach().cpu().numpy()
-            except AttributeError:
-                Logger.error("error to_np")
-                return x[i]
-        return x
-    else:
-        try:
-            return x.detach().cpu().numpy()
-        except AttributeError:
-            Logger.error("error to_np")
-            return x
-
-
-def run_training(monet, params, trainloader, logger):
-    checkpoint_file = os.path.join(logger.checkpoints_dir, "checkpoint.ckpt")
-    if params["load"] and os.path.isfile(checkpoint_file):
-        monet.load_state_dict(torch.load(checkpoint_file))
-        Logger.cluster_log('Restored parameters from', checkpoint_file)
-    else:
-        for w in monet.parameters():
-            std_init = 0.01
-            nn.init.normal_(w, mean=0., std=std_init)
-        Logger.cluster_log('Initialized parameters')
-
-    optimizer = optim.RMSprop(monet.parameters(), lr=1e-4)
-
-    for epoch in range(params["num_epochs"]):
-        running_loss = 0.0
-        for i, data in enumerate(trainloader, 0):
-            images, counts = data
-            images = images.cuda()
-            optimizer.zero_grad()
-            output = monet(images)
-            loss = torch.mean(output['loss'])
-            loss.backward()
-            optimizer.step()
-
-            running_loss += loss.item()
-
-            if i % params["vis_every"] == 0:
-                Logger.cluster_log('[%d, %5d] loss: %.3f' %
-                                   (epoch + 1, i + 1, running_loss / params["vis_every"]))
-                running_loss = 0.0
-                visualize.visualize_masks(numpify(images[:8]),
-                                          numpify(output['masks'][:8]),
-                                          numpify(output['reconstructions'][:8]), logger=logger)
-
-        torch.save(monet.state_dict(), checkpoint_file)
-
-    Logger.cluster_log('training done')
-
-
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import NoNorm
-
-
-def convert_to_np_im(torch_tensor, batch_idx=0):
-    return np.moveaxis(torch_tensor.data.numpy()[batch_idx], 0, -1)
-
-
-def plot(axes, ax1, ax2, tensor=None, title=None, grey=False, axis=False,
-         fontsize=4):
-    if tensor is not None:
-        im = convert_to_np_im(tensor)
-        if grey:
-            im = im[:, :, 0]
-            axes[ax1, ax2].imshow(im, norm=NoNorm(), cmap='gray')
-        else:
-            axes[ax1, ax2].imshow(im)
-    if not axis:
-        axes[ax1, ax2].axis('off')
-    else:
-        axes[ax1, ax2].set_xticks([])
-        axes[ax1, ax2].set_yticks([])
-    if title is not None:
-        axes[ax1, ax2].set_title(title, fontsize=fontsize)
-    # axes[ax1, ax2].set_aspect('equal')
-
-
-def run_training_genesis(monet, params, trainloader, logger, cfg):
-    checkpoint_file = os.path.join(logger.checkpoints_dir, "checkpoint.ckpt")
-    # if params["load_parameters"] and os.path.isfile(checkpoint_file):
-    #     monet.load_state_dict(torch.load(checkpoint_file))
-    #     Logger.cluster_log('Restored parameters from', checkpoint_file)
-    # else:
-    #     for w in monet.parameters():
-    #         std_init = 0.01
-    #         nn.init.normal_(w, mean=0., std=std_init)
-    #     Logger.cluster_log('Initialized parameters')
-
-    optimizer = optim.Adam(monet.parameters(), lr=0.0001)
-
-    for epoch in range(params["num_epochs"]):
-        running_loss = 0.0
-        running_kl = 0.
-        for i, data in enumerate(trainloader, 0):
-            monet.train()
-            images, counts = data
-            images = images.cuda()
-            optimizer.zero_grad()
-            output, losses, stats, att_stats, comp_stats = monet(images)
-
-            # Reconstruction error
-            err = losses.err.mean(0)
-            # KL divergences
-            kl_m, kl_l = torch.tensor(0), torch.tensor(0)
-            # -- KL stage 1
-            kl_m = losses.kl_m.mean(0)
-            # -- KL stage 2
-            kl_l = torch.stack(losses.kl_l_k, dim=1).mean(dim=0).sum()
-
-            loss = err + 0.5 * (kl_l + kl_m)
-            loss.backward()
-            optimizer.step()
-
-            running_loss += loss.detach().cpu().item()
-            running_kl += (kl_l + kl_m).detach().cpu().item()
-
-            if (i + 1) % params["vis_every"] == 0:
-                # Visualise
-                monet.eval()
-                K_steps = cfg["k_steps"]
-                num_images = 1
-                # Forward pass
-                output, _, stats, _, _ = monet(images)
-                # Set up figure
-                fig, axes = plt.subplots(nrows=4, ncols=1 + K_steps)
-
-                # Input and reconstruction
-                plot(axes, 0, 0, images.cpu(), title='Input image', fontsize=12)
-                plot(axes, 1, 0, output.cpu(), title='Reconstruction', fontsize=12)
-                # Empty plots
-                plot(axes, 2, 0, fontsize=12)
-                plot(axes, 3, 0, fontsize=12)
-
-                # Put K reconstruction steps into separate subfigures
-                x_k = stats['x_r_k']
-                log_m_k = stats['log_m_k']
-                mx_k = [x * m.exp() for x, m in zip(x_k, log_m_k)]
-                log_s_k = stats['log_s_k'] if 'log_s_k' in stats else None
-                for step in range(K_steps):
-                    mx_step = mx_k[step]
-                    x_step = x_k[step]
-                    m_step = log_m_k[step].exp()
-                    if log_s_k:
-                        s_step = log_s_k[step].exp()
-
-                    pre = 'Mask x RGB ' if step == 0 else ''
-                    plot(axes, 0, 1 + step, mx_step.cpu(), pre + f'k={step + 1}', fontsize=12)
-                    pre = 'RGB ' if step == 0 else ''
-                    plot(axes, 1, 1 + step, x_step.cpu(), pre + f'k={step + 1}', fontsize=12)
-                    pre = 'Mask ' if step == 0 else ''
-                    plot(axes, 2, 1 + step, m_step.cpu(), pre + f'k={step + 1}', True, fontsize=12)
-                    if log_s_k:
-                        pre = 'Scope ' if step == 0 else ''
-                        plot(axes, 3, 1 + step, s_step.cpu(), pre + f'k={step + 1}', True,
-                             axis=step == 0, fontsize=12)
-
-                # Beautify and show figure
-                plt.subplots_adjust(wspace=0.05, hspace=0.15)
-                plt.savefig(logger.get_sequential_figure_name("plot"), bbox_inches="tight")
-                plt.show()
-
-                Logger.cluster_log('[{}, {:>5}] loss: {:.3f} kl: {:3f}'.format(epoch + 1, i + 1,
-                                                                               running_loss /
-                                                                               params[
-                                                                                   "vis_every"],
-                                                                               running_kl / params[
-                                                                                   "vis_every"]))
-                running_loss = 0.0
-                running_kl = 0.
-            del images
-            del output, losses, att_stats, comp_stats
-        torch.save(monet.state_dict(), checkpoint_file)
-
-    Logger.cluster_log('training done')
-
-
-def print_image_stats(images, name):
-    print(name, '0 min/max', images[:, 0].min().item(), images[:, 0].max().item())
-    print(name, '1 min/max', images[:, 1].min().item(), images[:, 1].max().item())
-    print(name, '2 min/max', images[:, 2].min().item(), images[:, 2].max().item())
-
-
-def test_tensor(ten, name="name"):
-    print("{} ... max: {}, min: {}, mean: {}".format(name, torch.max(ten), torch.min(ten),
-                                                     torch.mean(ten)))
-
-
-import torch.autograd.profiler as profiler
+import visualize
+from logging_utils import Logger
 
 
 def sigmoid_annealing_(start_value, end_value, start_steps, end_steps, current_step):
@@ -284,7 +62,6 @@ def get_selected_params(output, selected_experts):
     return selected_results
 
 
-import seaborn as sns
 def copyParams(module_src, module_dest):
     params_src = module_src.named_parameters()
     params_dest = module_dest.named_parameters()
@@ -342,7 +119,7 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
             x = x.to(device)
             for expert_id in range(0, params["num_experts"]):
                 output = monet.run_single_expert(x, expert_id=0, gamma=1., beta=1.)
-                selected_experts = [[0]*x.shape[0]]*params["num_objects"]
+                selected_experts = [[0] * x.shape[0]] * params["num_objects"]
                 for obj in range(len(output["results"])):
                     output["results"][obj] = [output["results"][obj]]
 
@@ -488,20 +265,26 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                         # get results for selected experts
                         selected_results = get_selected_params(output, selected_experts)
 
-                        if len(segmentation_mask)>0:
+                        if len(segmentation_mask) > 0:
                             batch_scores, batch_selected_object_per_expert = \
                                 metric.compute_segmentation_covering_expert_score(params=params,
-                                                                                  attentions=selected_results["region_attention"],
+                                                                                  attentions=
+                                                                                  selected_results[
+                                                                                      "region_attention"],
                                                                                   selected_experts=selected_experts,
-                                                                                  recons_t=selected_results["x_recon_t"],
+                                                                                  recons_t=
+                                                                                  selected_results[
+                                                                                      "x_recon_t"],
                                                                                   segmentation_mask=segmentation_mask.detach().cpu().numpy())
                             scores.extend(list(batch_scores))
 
                             if selected_object_per_expert is None:
-                                selected_object_per_expert = batch_selected_object_per_expert.astype(int)
+                                selected_object_per_expert = batch_selected_object_per_expert.astype(
+                                    int)
                             else:
-                                selected_object_per_expert = np.hstack((selected_object_per_expert,batch_selected_object_per_expert)).astype(int)
-
+                                selected_object_per_expert = np.hstack((selected_object_per_expert,
+                                                                        batch_selected_object_per_expert)).astype(
+                                    int)
 
                         if a == 0:
                             visualize.plot_figure(
@@ -529,7 +312,8 @@ def run_training_ECON(monet, params, trainloader, testloader, logger, device):
                         del selected_results
 
                     # find the best score, this is the current score of the model
-                    logger.log_to_file("{}: {}\n".format(current_step, np.mean(scores)), "segmentation_score.log")
+                    logger.log_to_file("{}: {}\n".format(current_step, np.mean(scores)),
+                                       "segmentation_score.log")
                     print("MAX SCORE: {}".format(np.max(scores)))
 
                     store_average_progress(batch_val_loss_history,
@@ -611,17 +395,11 @@ def to_float(x):
 
 
 def run_model_training(params, trainloader, logger, testloader=None, model_name="ECON"):
-    if model_name == "genesis":
-        monet = monet_genesis.Monet(cfg=params).to(device)
-        run_training_genesis(monet, params, trainloader, logger=logger, cfg=params)
-    elif model_name == "ECON":
+    if model_name == "ECON":
         monet = econ_model.ECON(params=params).to(device)
         run_training_ECON(monet=monet, params=params, trainloader=trainloader,
                           testloader=testloader, logger=logger,
                           device=device)
-    else:
-        monet = monet_model.Monet(params=params, height=64, width=64).to(device)
-        run_training(monet, params, trainloader, logger=logger)
 
 
 def load_sprite(params):

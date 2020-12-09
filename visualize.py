@@ -1,8 +1,7 @@
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import NoNorm
-from logging_utils import Logger
+import numpy as np
 import seaborn as sns
+from matplotlib.colors import NoNorm
 
 identifiers_to_titles = {
     "loss": "Objective function",

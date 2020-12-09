@@ -1,12 +1,6 @@
-# License: MIT
-# Author: Karl Stelzner
-
-from collections import namedtuple
-import os
 import argparse
-import string
 import ast
-
+import string
 
 class HyperParameter:
     safechars = string.ascii_lowercase + string.ascii_uppercase + string.digits + ' .-_[]{}'
@@ -55,7 +49,7 @@ class Configuration:
         for param in self.p.values():
             param.add_argument_parser(parser=parser)
         args, namespace = parser.parse_known_args()
-        array_params = ["sigmas_x"]
+        array_params = ["sigmas_x"]  # TODO make this generate from the list of parameter
         for name, value in vars(args).items():
             if name == "configuration":
                 continue
@@ -473,62 +467,3 @@ def load_config():
         params.update(cfg.p)
 
     return params
-
-
-experiment_parameters = {
-    # Training config
-    'vis_every': 50,  # Visualize progress every X iterations
-    'batch_size': 1,
-    'num_epochs': 20,
-    'load_parameters': True,  # Load parameters from checkpoint
-    'data_dir': "data",  # Directory for the training data
-    'parallel': False,  # Train using nn.DataParallel
-    # Model config
-    'num_slots': 4,  # Number of slots k,
-    'num_blocks': 5,  # Number of blocks in attention U-Net
-    'channel_base': 64,  # Number of channels used for the first U-Net conv layer
-    'bg_sigma': 0.09,  # Sigma of the decoder distributions for the first slot
-    'fg_sigma': 0.11,  # Sigma of the decoder distributions for all other slots
-    'log_dir': "experiments"
-}
-sprite_experiment_parameters = experiment_parameters.copy()
-clevr_experiment_parameters = experiment_parameters.copy()
-clevr_experiment_parameters["num_epochs"] = 200
-clevr_experiment_parameters["num_slots"] = 11
-clevr_experiment_parameters["num_blocks"] = 6
-
-#
-# MonetConfig = namedtuple('MonetConfig', config_options)
-#
-# sprite_config = MonetConfig(vis_every=50,
-#                             batch_size=16,
-#                             num_epochs=20,
-#                             load_parameters=True,
-#                             checkpoint_file='./checkpoints/sprites.ckpt',
-#                             save_dir='experiments',
-#                             data_dir='data/',
-#                             parallel=False,
-#                             num_slots=4,
-#                             num_blocks=5,
-#                             channel_base=64,
-#                             bg_sigma=0.09,
-#                             fg_sigma=0.11,
-#                            )
-#
-# clevr_config = MonetConfig(vis_every=50,
-#                            batch_size=64,
-#                            num_epochs=200,
-#                            load_parameters=True,
-#                            checkpoint_file='/work/checkpoints/clevr64.ckpt',
-#                            data_dir=os.path.expanduser('~/data/CLEVR_v1.0/images/train/'),
-#                            parallel=True,
-#                            num_slots=11,
-#                            num_blocks=6,
-#                            channel_base=64,
-#                            bg_sigma=0.09,
-#                            fg_sigma=0.11,
-#                            save_dir="experiments"
-#                           )
-#
-#
-#

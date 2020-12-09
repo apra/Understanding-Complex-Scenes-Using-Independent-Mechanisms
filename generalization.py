@@ -1,29 +1,13 @@
-import torch
-import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
-import torch.optim as optim
-import numpy as np
-# import visdom
-
-import os
-
-import monet_model
-import monet_genesis
-import econ_model
-import datasets
-import config
-
-from logging_utils import Logger
-import visualize
-
-import matplotlib.pyplot as plt
-
 import argparse
-import string
-import ast
 
-# vis = visdom.Visdom()
+import numpy as np
+import torch
+import torchvision.transforms as transforms
+
+import datasets
+import econ_model
+import visualize
+from logging_utils import Logger
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 Logger.cluster_log(device)
@@ -103,7 +87,7 @@ def get_selected_params(output, selected_experts):
                     sample]
     return selected_results
 
-import seaborn as sns
+
 def test_generalization(params, num_objects, logger):
     monet = econ_model.ECON(params=params).to(device)
     state = logger.load_checkpoint()

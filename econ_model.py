@@ -2,12 +2,8 @@ import torch
 import torch.nn as nn
 import torch.distributions as dists
 import torch.nn.functional as F
-import torchvision
-
-from attrdict import AttrDict
 
 from torch.distributions.normal import Normal
-from torch.distributions.categorical import Categorical
 from torch.distributions.kl import kl_divergence
 
 import numpy as np
@@ -106,11 +102,6 @@ class SimpleSBP(nn.Module):
         # Update scope
         next_log_s = log_s_t + log_neg_a
 
-        # if torch.isnan(log_r).any():
-        #     test_tensor(log_s_t, "ATTENTION log_s_t")
-        #     test_tensor(core_out, "ATTENTION core_out")
-        #     test_tensor(log_a, "ATTENTION log_a")
-
         return {
             "next_log_s": next_log_s,
             "log_r": log_r
@@ -202,7 +193,6 @@ class ComponentVAE(nn.Module):
 
         encoding_results = self.encode(x, log_r)
 
-        # -- Decode
         decoding_results = self.decode(encoding_results["z"])
 
         return {
@@ -276,6 +266,8 @@ class Expert(nn.Module):
             x: Input images [B, C, H, W]
             log_s_t: logarithm of scope for element t
             last_object: if this is the last object to be reconstructed
+            sigma_x: the sigma for the reconstruction distribution
+            last_object: True if this the last object being reconstructed
         """
         next_log_s_t = torch.zeros_like(log_s_t)
         log_r_t = log_s_t
@@ -285,7 +277,6 @@ class Expert(nn.Module):
             next_log_s_t = attention_results["next_log_s"]
             log_r_t = attention_results["log_r"]
 
-        # --- Reconstruct components ---
         vae_results = self.comp_vae(x, log_r_t)
         log_mu_x = vae_results["log_mu_x"]
         log_m_pred_t = vae_results["log_m_pred_t"]
@@ -293,9 +284,7 @@ class Expert(nn.Module):
         r_t_pred = (log_s_t + log_m_pred_t).exp()
         prob_r_t_pred = torch.clamp(r_t_pred, 1e-5, 1 - 1e-5)
         prob_log_r_t = torch.clamp(log_r_t.exp(), 1e-5, 1 - 1e-5)
-        # test_tensor(r_t_pred, "r_t_pred")
-        # test_tensor(r_t_pred, "R r_t_pred")
-        # test_tensor(log_r_t.exp(), "R log_r_t.exp()")
+
         p_r_t = dists.Bernoulli(probs=prob_r_t_pred)
         q_psi_t = dists.Bernoulli(probs=prob_log_r_t)
 
@@ -317,16 +306,6 @@ class Expert(nn.Module):
         # the reconstructed mask from the VAE
         mask_recon = log_m_pred_t.exp()
 
-        # debug
-        # if torch.isinf(loss_r_t).any():
-        #     test_tensor(loss_r_t, "R loss_r_t")
-        # if torch.isnan(loss_x_t).any():
-        #     print(log_r_t)
-        #     print("Is last object: {}".format(last_object))
-        #     test_tensor(log_s_t, "R log_s_t")
-        #     test_tensor(r_t_pred, "R r_t_pred")
-        #     test_tensor(log_r_t.exp(), "R log_r_t.exp()")
-
         return {
             "loss_x_t": loss_x_t,
             "loss_z_t": loss_z_t,
@@ -344,9 +323,6 @@ class Expert(nn.Module):
         with torch.no_grad():
             _, _, _, _, comp_stats = self.forward(image_batch)
             return torch.cat(comp_stats.z_k, dim=1)
-
-    def sample(self, batch_size, num_objects):
-        return NotImplementedError
 
 
 def all_to_cpu(data):

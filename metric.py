@@ -110,13 +110,13 @@ def compute_segmentation_covering_expert_score(params, attentions, selected_expe
 
         expert_segmentation += partial
 
-    fig,ax = plt.subplots()
-    ax.imshow(expert_segmentation[0].transpose(1,2,0))
-    plt.show()
+    # fig,ax = plt.subplots()
+    # ax.imshow(expert_segmentation[0].transpose(1,2,0))
+    # plt.show()
 
     ground_truth_objects = convert_image_to_segmentation_mask(segmentation_mask.transpose(0,2,3,1),segmentation_colors)
     scores = np.zeros((batch_size, ))
-    total_area = np.zeros((batch_size, ))
+    total_area = np.zeros((batch_size, ))+1e-6
 
     expert_predicted_object = np.zeros((num_experts,batch_size))
 
@@ -139,7 +139,6 @@ def compute_segmentation_covering_expert_score(params, attentions, selected_expe
             best_iou = np.where(np.greater(np.squeeze(iou), np.squeeze(best_iou)), np.squeeze(iou), np.squeeze(best_iou))
 
         scores += np.squeeze(N)*best_iou
-        print(np.max(best_iou))
         total_area += np.squeeze(N)
         expert_predicted_object[expert_id-1] = best_objects
 
